@@ -21,7 +21,8 @@ const pendingResolvers = new Map<
   { resolve: (r: unknown) => void; reject: (e: Error) => void }
 >();
 
-// Agent posts a command and waits for the plugin to execute it
+// Agent posts a command and waits for the plugin to execute it.
+// No timeout — waits indefinitely until the plugin connects and runs it.
 app.post('/commands', async (req, res) => {
   const command: Command = {
     id: randomUUID(),
@@ -35,14 +36,40 @@ app.post('/commands', async (req, res) => {
   try {
     const result = await new Promise<unknown>((resolve, reject) => {
       pendingResolvers.set(command.id, { resolve, reject });
-      setTimeout(() => {
-        if (pendingResolvers.has(command.id)) {
-          pendingResolvers.delete(command.id);
-          reject(new Error('Command timed out after 30s'));
-        }
-      }, 30_000);
+      // No timeout — the plugin may connect after the commands are queued.
     });
     res.json({ id: command.id, result });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// Agent bulk-queues many commands at once and waits for ALL of them to finish.
+// Returns in the same order as submitted.
+app.post('/commands/bulk', async (req, res) => {
+  const items = req.body as Array<{ type: string; params?: Record<string, unknown> }>;
+  const commands: Command[] = items.map((item) => ({
+    id: randomUUID(),
+    type: item.type,
+    params: item.params ?? {},
+    status: 'pending' as const,
+  }));
+
+  for (const c of commands) {
+    commandQueue.push(c);
+    console.log(`[bulk]  +${c.type} (${c.id.slice(0, 8)})`);
+  }
+
+  try {
+    const results = await Promise.all(
+      commands.map(
+        (c) =>
+          new Promise<unknown>((resolve, reject) => {
+            pendingResolvers.set(c.id, { resolve, reject });
+          }),
+      ),
+    );
+    res.json({ count: commands.length, results });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
