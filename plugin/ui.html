@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Figma Slides Agent</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Inter, -apple-system, sans-serif;
+      font-size: 12px;
+      color: #333;
+      background: #fafafa;
+      padding: 16px;
+    }
+    h2 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #111; }
+    #status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 6px;
+    }
+    #dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #ccc;
+      flex-shrink: 0;
+    }
+    #dot.connected { background: #22c55e; }
+    #dot.working   { background: #f59e0b; animation: pulse 1s infinite; }
+    #dot.error     { background: #ef4444; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    #status-text { flex: 1; color: #555; }
+    #log {
+      height: 200px;
+      overflow-y: auto;
+      background: #1e1e1e;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: 'Menlo', 'Consolas', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .entry { color: #aaa; }
+    .entry.ok   { color: #86efac; }
+    .entry.err  { color: #fca5a5; }
+    .entry.cmd  { color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <h2>Figma Slides Agent</h2>
+  <div id="status-bar">
+    <div id="dot"></div>
+    <span id="status-text">Connecting to bridge server…</span>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    const SERVER = 'http://localhost:3333';
+    const POLL_MS = 400;
+
+    const dot        = document.getElementById('dot');
+    const statusText = document.getElementById('status-text');
+    const logEl      = document.getElementById('log');
+
+    let activeCommandId = null;
+
+    function setStatus(text, state /* connected|working|error|idle */) {
+      statusText.textContent = text;
+      dot.className = state === 'connected' || state === 'idle' ? 'connected'
+                    : state === 'working' ? 'working'
+                    : state === 'error'   ? 'error'
+                    : '';
+    }
+
+    function log(msg, cls = '') {
+      const el = document.createElement('div');
+      el.className = 'entry ' + cls;
+      el.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+      logEl.appendChild(el);
+      logEl.scrollTop = logEl.scrollHeight;
+      // keep log bounded
+      while (logEl.children.length > 120) logEl.removeChild(logEl.firstChild);
+    }
+
+    // ── Poll server for the next command ──────────────────────────────────────
+    async function poll() {
+      if (activeCommandId) return; // wait for current command to finish
+      try {
+        const res = await fetch(SERVER + '/commands/next');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const cmd = await res.json();
+        if (!cmd) return; // nothing queued
+
+        activeCommandId = cmd.id;
+        setStatus('Executing ' + cmd.type + '…', 'working');
+        log('→ ' + cmd.type + ' ' + JSON.stringify(cmd.params).slice(0, 80), 'cmd');
+
+        // Forward to main thread
+        parent.postMessage(
+          { pluginMessage: { commandId: cmd.id, type: cmd.type, params: cmd.params } },
+          '*',
+        );
+      } catch {
+        setStatus('Cannot reach bridge server — start it with npm run server', 'error');
+      }
+    }
+
+    // ── Receive result from main thread ───────────────────────────────────────
+    window.onmessage = async (event) => {
+      const msg = event.data?.pluginMessage;
+      if (!msg?.commandId) return;
+
+      try {
+        await fetch(SERVER + '/commands/' + msg.commandId + '/result', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ result: msg.result, error: msg.error }),
+        });
+
+        if (msg.error) {
+          log('✗ ' + msg.error, 'err');
+          setStatus('Error — see log', 'error');
+        } else {
+          log('✓ done', 'ok');
+          setStatus('Ready', 'idle');
+        }
+      } catch (e) {
+        log('failed to report result: ' + e.message, 'err');
+      } finally {
+        activeCommandId = null;
+      }
+    };
+
+    // ── Start ──────────────────────────────────────────────────────────────────
+    async function connect() {
+      try {
+        await fetch(SERVER + '/health');
+        setStatus('Ready — waiting for agent…', 'connected');
+        log('connected to bridge server', 'ok');
+        setInterval(poll, POLL_MS);
+      } catch {
+        setStatus('Bridge server not running — start with: npm run server', 'error');
+        log('retrying in 3s…', 'err');
+        setTimeout(connect, 3000);
+      }
+    }
+
+    connect();
+  </script>
+</body>
+</html>

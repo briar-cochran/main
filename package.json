@@ -1,0 +1,12 @@
+{
+  "name": "figma-slides-agent-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["server", "agent", "plugin"],
+  "scripts": {
+    "server": "cd server && npm run dev",
+    "agent": "cd agent && npm run dev",
+    "build:plugin": "cd plugin && npm run build",
+    "watch:plugin": "cd plugin && npm run watch"
+  }
+}
