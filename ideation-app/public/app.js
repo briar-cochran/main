@@ -1,13 +1,41 @@
-/* Idea Ranker — vanilla JS client */
+/* Idea Ranker — vanilla JS client.
+   Two modes:
+   - Admin (/):      list + create sessions, share client links. Optionally
+                     gated by an ADMIN_KEY (sent as x-admin-key).
+   - Client (/r/:id) one session only — rank, explain, done. */
 
 const $ = (sel) => document.querySelector(sel);
+
+const CLIENT_MODE = location.pathname.startsWith('/r/');
+const CLIENT_SESSION_ID = CLIENT_MODE ? location.pathname.split('/')[2] : null;
+
+// ---------- API ----------
+
+function adminHeaders() {
+  const key = localStorage.getItem('adminKey');
+  return key ? { 'x-admin-key': key } : {};
+}
+
+async function adminFetch(url, opts = {}) {
+  opts.headers = { ...(opts.headers || {}), ...adminHeaders() };
+  let res = await fetch(url, opts);
+  if (res.status === 401) {
+    const key = prompt('Admin key:');
+    if (key) {
+      localStorage.setItem('adminKey', key);
+      opts.headers = { ...(opts.headers || {}), ...adminHeaders() };
+      res = await fetch(url, opts);
+    }
+  }
+  return res;
+}
+
 const api = {
-  listSessions: () => fetch('/api/sessions').then((r) => r.json()),
+  listSessions: () => adminFetch('/api/sessions').then((r) => (r.ok ? r.json() : [])),
   createSession: (body) =>
-    fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json()),
+    adminFetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json()),
   getSession: (id) => fetch(`/api/sessions/${id}`).then((r) => r.json()),
-  generate: (id, count) =>
-    fetch(`/api/sessions/${id}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count }) }),
+  generateBatch: (id) => fetch(`/api/sessions/${id}/generate-batch`, { method: 'POST' }).then((r) => r.json()),
   rate: (sid, iid, rating) =>
     fetch(`/api/sessions/${sid}/ideas/${iid}/rating`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating }) }),
   reason: (sid, iid, transcript, inputMethod) =>
@@ -24,11 +52,11 @@ const RATING_META = {
 };
 
 let state = {
-  session: null,     // full session object
-  queue: [],         // unrated ideas, in order
-  current: null,     // idea being rated / explained
-  pollTimer: null,
-  voiceUsed: false,  // whether dictation produced the transcript
+  session: null,
+  queue: [],          // unrated ideas, in order
+  current: null,      // idea being rated / explained
+  pumping: false,     // generation loop active
+  voiceUsed: false,
 };
 
 // ---------- Views ----------
@@ -38,7 +66,7 @@ function show(viewId) {
   $('#' + viewId).classList.remove('hidden');
 }
 
-// ---------- Home ----------
+// ---------- Home (admin) ----------
 
 async function renderHome() {
   show('view-home');
@@ -51,7 +79,16 @@ async function renderHome() {
     const gen = s.generation.status === 'running' ? ` · generating ${s.generation.generated}/${s.generation.target}` : '';
     el.innerHTML = `<div><strong>${escapeHtml(s.clientName)}</strong>
       <div class="meta">${s.rated}/${s.total} rated${gen} · ${new Date(s.createdAt).toLocaleDateString()}</div></div>
-      <span class="go">→</span>`;
+      <div class="session-actions">
+        <button class="ghost copy-link" title="Copy client link">🔗</button>
+        <span class="go">→</span>
+      </div>`;
+    el.querySelector('.copy-link').onclick = (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(`${location.origin}/r/${s.id}`);
+      e.target.textContent = '✓';
+      setTimeout(() => (e.target.textContent = '🔗'), 1200);
+    };
     el.onclick = () => openSession(s.id);
     list.appendChild(el);
   }
@@ -59,6 +96,7 @@ async function renderHome() {
 
 $('#btn-create').onclick = async () => {
   const clientName = $('#client-name').value.trim();
+  const clientSlug = $('#client-slug').value.trim();
   const brief = $('#client-brief').value.trim();
   const count = Number($('#idea-count').value) || 100;
   if (!clientName) return alert('Client name is required.');
@@ -66,36 +104,50 @@ $('#btn-create').onclick = async () => {
 
   $('#btn-create').disabled = true;
   try {
-    const session = await api.createSession({ clientName, brief });
-    await api.generate(session.id, count);
+    const session = await api.createSession({ clientName, clientSlug, brief, target: count });
+    if (session.error) return alert(session.error);
     await openSession(session.id);
   } finally {
     $('#btn-create').disabled = false;
   }
 };
 
-$('#btn-back').onclick = () => { stopPolling(); renderHome(); };
-$('#btn-done-home').onclick = () => renderHome();
+const backBtn = $('#btn-back');
+if (CLIENT_MODE) backBtn.classList.add('hidden');
+backBtn.onclick = () => renderHome();
+$('#btn-done-home').onclick = () => (CLIENT_MODE ? show('view-done') : renderHome());
+
+$('#btn-share').onclick = () => {
+  navigator.clipboard.writeText(`${location.origin}/r/${state.session.id}`);
+  $('#btn-share').textContent = '✓';
+  setTimeout(() => ($('#btn-share').textContent = '🔗'), 1200);
+};
 
 // ---------- Ranking ----------
 
 async function openSession(id) {
   state.session = await api.getSession(id);
+  if (state.session.error) {
+    document.body.innerHTML = '<p style="padding:40px;text-align:center;color:#9aa1b5">Session not found — check the link.</p>';
+    return;
+  }
   state.queue = state.session.ideas.filter((i) => !i.rating);
   show('view-rank');
+  if (CLIENT_MODE) backBtn.classList.add('hidden');
   renderProgress();
   renderStack();
-  startPollingIfGenerating();
+  pumpGeneration();
   maybeDone();
 }
 
 function renderProgress() {
-  const total = state.session.ideas.length;
+  const total = Math.max(state.session.ideas.length, state.session.generation.target || 0);
   const rated = state.session.ideas.filter((i) => i.rating).length;
   $('#progress-fill').style.width = total ? `${(rated / total) * 100}%` : '0%';
   $('#progress-label').textContent = `${rated} / ${total}`;
   const g = state.session.generation;
-  $('#gen-status').textContent = g.status === 'running' ? `✨ ${g.generated}/${g.target}` : g.status === 'error' ? '⚠ gen failed' : '';
+  $('#gen-status').textContent =
+    g.status === 'running' ? `✨ ${g.generated}/${g.target}` : g.status === 'error' ? '⚠ gen failed' : '';
 }
 
 function renderStack() {
@@ -311,44 +363,72 @@ function closeReasonAndAdvance() {
   maybeDone();
 }
 
-// ---------- Generation polling ----------
+// ---------- Generation pump ----------
+// Whichever browser has the session open drives generation: one batch per
+// request until the target is reached. Serverless-friendly — no long-running
+// job on the server.
 
-function startPollingIfGenerating() {
-  stopPolling();
-  if (state.session.generation.status !== 'running') return;
-  state.pollTimer = setInterval(async () => {
-    const fresh = await api.getSession(state.session.id);
-    const known = new Set(state.session.ideas.map((i) => i.id));
-    for (const idea of fresh.ideas) {
-      if (!known.has(idea.id)) state.queue.push(idea);
+async function pumpGeneration() {
+  if (state.pumping || state.session.generation.status !== 'running') return;
+  state.pumping = true;
+  try {
+    while (state.session && state.session.generation.status === 'running') {
+      let result;
+      try {
+        result = await api.generateBatch(state.session.id);
+      } catch (_) {
+        await new Promise((r) => setTimeout(r, 5000));
+        continue;
+      }
+      if (result.error) {
+        state.session.generation.status = 'error';
+        renderProgress();
+        break;
+      }
+      state.session.generation = result.generation;
+      const known = new Set(state.session.ideas.map((i) => i.id));
+      for (const idea of result.newIdeas || []) {
+        if (!known.has(idea.id)) {
+          state.session.ideas.push(idea);
+          state.queue.push(idea);
+        }
+      }
+      renderProgress();
+      if (!$('#card-stack .idea-card.top') && !state.current) renderStack();
+      if (result.done) break;
     }
-    // keep local rating state; adopt fresh idea list + generation status
-    const ratedLocal = new Map(state.session.ideas.map((i) => [i.id, i.rating]));
-    fresh.ideas.forEach((i) => { if (ratedLocal.get(i.id)) i.rating = ratedLocal.get(i.id); });
-    state.session = fresh;
-    renderProgress();
-    if (!$('#card-stack .idea-card.top') && !state.current) renderStack();
-    if (fresh.generation.status !== 'running') stopPolling();
-  }, 4000);
-}
-
-function stopPolling() {
-  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+  } finally {
+    state.pumping = false;
+    maybeDone();
+  }
 }
 
 // ---------- Done ----------
 
 function maybeDone() {
+  if (!state.session) return;
   if (state.queue.length > 0 || state.current) return;
   if (state.session.generation.status === 'running') return; // more coming
   if (state.session.ideas.length === 0) return;
-  stopPolling();
   const counts = { love: 0, like: 0, dislike: 0, hate: 0 };
   state.session.ideas.forEach((i) => { if (counts[i.rating] !== undefined) counts[i.rating]++; });
-  $('#done-summary').textContent = `${state.session.clientName} ranked ${state.session.ideas.length} ideas.`;
+  const n = state.session.ideas.length;
+  const nIdeas = `${n} idea${n === 1 ? '' : 's'}`;
+  $('#done-summary').textContent = CLIENT_MODE
+    ? `You ranked ${nIdeas}. Thank you — this shapes everything we make for you next.`
+    : `${state.session.clientName} ranked ${nIdeas}.`;
   $('#done-counts').innerHTML = Object.entries(counts)
     .map(([k, v]) => `<div><b>${v}</b>${RATING_META[k].emoji} ${k}</div>`).join('');
-  $('#export-link').href = `/api/sessions/${state.session.id}/export`;
+  const exportLink = $('#export-link');
+  const jsonlLink = $('#export-jsonl-link');
+  if (CLIENT_MODE) {
+    exportLink.classList.add('hidden');
+    jsonlLink.classList.add('hidden');
+    $('#btn-done-home').classList.add('hidden');
+  } else {
+    exportLink.href = `/api/sessions/${state.session.id}/export`;
+    jsonlLink.href = `/api/sessions/${state.session.id}/export.jsonl`;
+  }
   show('view-done');
 }
 
@@ -358,4 +438,8 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-renderHome();
+if (CLIENT_MODE) {
+  openSession(CLIENT_SESSION_ID);
+} else {
+  renderHome();
+}

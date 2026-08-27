@@ -1,11 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { RankingSession, loadSession, makeIdea, saveSession } from './store';
+import { RankingSession, makeIdea } from './store';
 
 const client = new Anthropic();
 
 const MODEL = process.env.IDEATION_MODEL ?? 'claude-opus-5';
+export const BATCH_SIZE = 10;
 
 // The `temperature` sampling parameter is removed on current Claude models, so
 // variety comes from structure instead: each batch is generated through a
@@ -13,8 +14,10 @@ const MODEL = process.env.IDEATION_MODEL ?? 'claude-opus-5';
 // hard instruction not to overlap. This produces more *useful* spread than raw
 // temperature (which mostly adds phrasing noise, not conceptual diversity).
 //
-// When the Oakland ideation skill is wired in, its angle taxonomy / prompt
-// structure should replace or extend these lenses — see ideation-app/README.md.
+// The full Oakline ideation skill (oakline/04-skills/ideation) is reference-first
+// and research-backed (TubeLab/Apify outliers); these lenses are the lightweight
+// stand-in for taste-calibration runs. Swap in the skill's angle taxonomy here
+// if/when this app should mirror it exactly.
 const LENSES = [
   'Contrarian takes — challenge a belief this audience holds as obvious truth',
   'Personal stories — moments of failure, change, or realization the client could tell first-person',
@@ -28,22 +31,27 @@ const LENSES = [
   'Curiosity gaps and questions — open questions, experiments, and "what would happen if" explorations',
 ];
 
+// Formats from the Oakline ideation skill's structured-mode taxonomy, plus yap.
+const FORMATS =
+  'yap (direct-to-camera), green-screen reveal, ranking, tier list, bracket, split-screen, before/after board, scorecard, mirror-board, notes-app reveal, case-study teardown, reaction, listicle, whiteboard breakdown';
+
 const IdeaBatchSchema = z.object({
   ideas: z.array(
     z.object({
       title: z.string().describe('A concise, specific content idea title (not clickbait, not generic)'),
       hook: z.string().describe('One sentence: the opening line or core tension that makes this worth talking about'),
-      format: z.string().describe('Suggested format, e.g. "talking head", "story post", "listicle", "tutorial"'),
+      format: z.string().describe(`Suggested format, one of: ${FORMATS}`),
     }),
   ),
 });
 
-function batchPrompt(session: RankingSession, lens: string, count: number, existingTitles: string[]): string {
+function batchPrompt(session: RankingSession, lens: string, count: number): string {
+  const existingTitles = session.ideas.map((i) => i.title);
   const existing = existingTitles.length
     ? `\n\nIdeas already generated for this client (do NOT repeat or closely paraphrase any of these — every new idea must be conceptually distinct):\n${existingTitles.map((t) => `- ${t}`).join('\n')}`
     : '';
 
-  return `You are generating content ideas for a client of a content agency. The client will review each idea and rate it love / like / dislike / hate, so the goal is a wide, diverse spread of ideas — including some risky ones — rather than 10 safe variations of the same thing.
+  return `You are generating content ideas for a client of a content agency. The client will review each idea and rate it love / like / dislike / hate, so the goal is a wide, diverse spread of ideas — including some risky ones — rather than 10 safe variations of the same thing. Their ratings become taste-calibration data for future ideation runs.
 
 Client: ${session.clientName}
 Client brief:
@@ -55,68 +63,31 @@ ${lens}
 Rules:
 - Every idea must be specific to THIS client and brief, not generic advice that fits anyone.
 - Vary scope and tone within the batch: some broad, some narrow; some safe, some provocative.
+- Vary formats across the batch (${FORMATS}).
 - Titles are working titles the client reads on a card — clear and concrete, under 15 words.${existing}`;
 }
 
 /**
- * Generates ideas for a session in the background, saving progress after each
- * batch so the UI can poll. Diversity strategy: one batch per creative lens,
- * cycling through lenses until `total` is reached, with cross-batch dedup
- * pressure via the accumulated title list.
+ * Generates ONE batch of ideas synchronously and returns them (they are not
+ * saved here — the route handles persistence). One batch per HTTP request so
+ * the whole run fits inside serverless execution limits; the frontend loops
+ * until the session's generation target is reached. The lens rotates with the
+ * batch number so consecutive batches take different creative angles.
  */
-export async function generateIdeas(sessionId: string, total: number): Promise<void> {
-  const batchSize = 10;
-  let session = loadSession(sessionId);
-  if (!session) throw new Error('session not found');
+export async function generateBatch(session: RankingSession, count: number) {
+  const batchNumber = Math.floor(session.ideas.length / BATCH_SIZE);
+  const lens = LENSES[batchNumber % LENSES.length];
 
-  session.generation = { status: 'running', target: total, generated: 0, error: null };
-  saveSession(session);
+  const response = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 16000,
+    messages: [{ role: 'user', content: batchPrompt(session, lens, count) }],
+    output_config: { format: zodOutputFormat(IdeaBatchSchema) },
+  });
 
-  try {
-    let generated = 0;
-    let lensIndex = 0;
-    while (generated < total) {
-      const count = Math.min(batchSize, total - generated);
-      const lens = LENSES[lensIndex % LENSES.length];
-      lensIndex++;
+  const parsed = response.parsed_output;
+  if (!parsed) throw new Error('model returned unparseable output');
 
-      // Reload each iteration so ratings happening in parallel aren't clobbered.
-      session = loadSession(sessionId)!;
-      const existingTitles = session.ideas.map((i) => i.title);
-
-      const response = await client.messages.parse({
-        model: MODEL,
-        max_tokens: 16000,
-        messages: [{ role: 'user', content: batchPrompt(session, lens, count, existingTitles) }],
-        output_config: { format: zodOutputFormat(IdeaBatchSchema) },
-      });
-
-      const parsed = response.parsed_output;
-      if (!parsed) throw new Error('model returned unparseable output');
-
-      const shortLens = lens.split('—')[0].trim();
-      session = loadSession(sessionId)!;
-      for (const idea of parsed.ideas.slice(0, count)) {
-        session.ideas.push(makeIdea({ ...idea, angle: shortLens }));
-      }
-      generated = session.ideas.length >= total ? total : session.ideas.length;
-      session.generation = { status: 'running', target: total, generated: session.ideas.length, error: null };
-      saveSession(session);
-    }
-
-    session = loadSession(sessionId)!;
-    session.generation = { status: 'done', target: total, generated: session.ideas.length, error: null };
-    saveSession(session);
-  } catch (err) {
-    const s = loadSession(sessionId);
-    if (s) {
-      s.generation = {
-        status: 'error',
-        target: total,
-        generated: s.ideas.length,
-        error: (err as Error).message,
-      };
-      saveSession(s);
-    }
-  }
+  const shortLens = lens.split('—')[0].trim();
+  return parsed.ideas.slice(0, count).map((idea) => makeIdea({ ...idea, angle: shortLens }));
 }

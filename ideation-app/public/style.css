@@ -95,6 +95,9 @@ button {
 .session-item:hover { background: var(--panel-2); }
 .session-item .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
 .session-item .go { color: var(--accent); font-size: 20px; }
+.session-actions { display: flex; align-items: center; gap: 10px; }
+.session-actions .ghost { padding: 6px 10px; }
+.ghost.button-link { border: 1px solid #333849; color: var(--muted); }
 
 /* ---- Ranking ---- */
 .rank-header { display: flex; align-items: center; gap: 12px; padding: 8px 0 16px; }

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Idea Ranker</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <!-- Home: session list + creation -->
@@ -18,6 +18,9 @@
       <h2>New session</h2>
       <label>Client name
         <input id="client-name" type="text" placeholder="e.g. Acme Fitness" />
+      </label>
+      <label>Client slug <span class="hint">(optional — matches oakline 01-clients/{slug})</span>
+        <input id="client-slug" type="text" placeholder="e.g. faiez-rana" />
       </label>
       <label>Client brief <span class="hint">(niche, audience, goals, voice — the more the better)</span>
         <textarea id="client-brief" rows="5" placeholder="Who is this client, who is their audience, what do they sell, what do they want to be known for..."></textarea>
@@ -40,6 +43,7 @@
         <span id="progress-label">0 / 0</span>
       </div>
       <span id="gen-status" class="gen-status"></span>
+      <button id="btn-share" class="ghost" title="Copy client link">🔗</button>
     </header>
 
     <div id="card-stack" class="card-stack"></div>
@@ -78,10 +82,11 @@
       <p id="done-summary"></p>
       <div id="done-counts" class="done-counts"></div>
       <a id="export-link" class="primary button-link" target="_blank">Download catalog (JSON)</a>
+      <a id="export-jsonl-link" class="ghost button-link" target="_blank">ideation-feedback.jsonl (Oakline)</a>
       <button id="btn-done-home" class="ghost">Back to sessions</button>
     </div>
   </section>
 
-  <script src="app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>
