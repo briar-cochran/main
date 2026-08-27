@@ -58,7 +58,6 @@
       <button class="rate like" data-rating="like" title="Like (3)"><span>👍</span>Like</button>
       <button class="rate love" data-rating="love" title="Love (4)"><span>❤️</span>Love</button>
     </div>
-    <p class="key-hint">Keys: 1 hate · 2 dislike · 3 like · 4 love. Or swipe: left hate, down dislike, up like, right love</p>
   </section>
 
   <!-- Voice reason overlay -->
@@ -71,6 +70,7 @@
         <div class="mic-ring"></div>
         <div class="mic-icon">🎙️</div>
       </div>
+      <div id="audio-meter" class="audio-meter" aria-hidden="true"></div>
       <p id="mic-status" class="mic-status">Starting microphone…</p>
       <textarea id="reason-text" rows="3" placeholder="Your reason appears here. You can also type or edit it."></textarea>
       <div class="reason-actions">

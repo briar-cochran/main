@@ -11,12 +11,21 @@ export interface Reason {
   recordedAt: string;
 }
 
+export interface IdeaSource {
+  title: string;
+  creator: string;
+  url: string;    // clickable "view original" link; http(s) only
+  metric: string; // human-readable proof, e.g. "21x channel outlier · 362,748 views"
+}
+
 export interface Idea {
   id: string;
   title: string;
   hook: string;
+  ost: string; // on-screen text line(s), shown under the hook
   angle: string;
   format: string;
+  source: IdeaSource | null;
   rating: Rating | null;
   ratedAt: string | null;
   reason: Reason | null;
@@ -66,13 +75,22 @@ export function newSession(fields: { clientName: string; clientSlug: string; bri
   };
 }
 
-export function makeIdea(fields: { title: string; hook: string; angle: string; format: string }): Idea {
+export function makeIdea(fields: {
+  title: string;
+  hook: string;
+  angle: string;
+  format: string;
+  ost?: string;
+  source?: IdeaSource | null;
+}): Idea {
   return {
     id: randomUUID(),
     title: fields.title,
     hook: fields.hook,
+    ost: fields.ost ?? '',
     angle: fields.angle,
     format: fields.format,
+    source: fields.source ?? null,
     rating: null,
     ratedAt: null,
     reason: null,

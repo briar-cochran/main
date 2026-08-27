@@ -71,13 +71,29 @@ app.get('/api/sessions', requireAdmin, wrap(async (_req, res) => {
 // Create a session. Ideas can be imported directly (e.g. output from the
 // Oakline ideation skill) via `ideas: [{title, hook?, angle?, format?}]`,
 // generated via the /generate endpoints, or both.
+// Imported ideas may carry an on-screen-text line and a source reference
+// (the outlier the idea was built from) so the ranking card can show its
+// receipts. Source URLs are restricted to http(s).
+function cleanSource(raw: unknown): { title: string; creator: string; url: string; metric: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Record<string, unknown>;
+  const url = String(s.url ?? '');
+  if (!/^https?:\/\//i.test(url)) return null;
+  return {
+    title: String(s.title ?? '').slice(0, 300),
+    creator: String(s.creator ?? '').slice(0, 100),
+    url: url.slice(0, 500),
+    metric: String(s.metric ?? '').slice(0, 120),
+  };
+}
+
 app.post('/api/sessions', requireAdmin, wrap(async (req, res) => {
   const { clientName, clientSlug, brief, ideas, target } = req.body as {
     clientName?: string;
     clientSlug?: string;
     brief?: string;
     target?: number;
-    ideas?: Array<{ title: string; hook?: string; angle?: string; format?: string }>;
+    ideas?: Array<{ title: string; hook?: string; ost?: string; angle?: string; format?: string; source?: unknown }>;
   };
   if (!clientName?.trim()) return res.status(400).json({ error: 'clientName is required' });
 
@@ -94,8 +110,10 @@ app.post('/api/sessions', requireAdmin, wrap(async (req, res) => {
         makeIdea({
           title: String(idea.title),
           hook: String(idea.hook ?? ''),
+          ost: String(idea.ost ?? ''),
           angle: String(idea.angle ?? 'imported'),
           format: String(idea.format ?? ''),
+          source: cleanSource(idea.source),
         }),
       );
     }
@@ -312,8 +330,10 @@ app.get('/api/sessions/:id/export', requireAdmin, wrap(async (req, res) => {
     entries: session.ideas.map((i) => ({
       title: i.title,
       hook: i.hook,
+      ost: i.ost || null,
       angle: i.angle,
       format: i.format,
+      source: i.source ?? null,
       rating: i.rating,
       reason: i.reason?.transcript || null,
       reasonMethod: i.reason?.inputMethod ?? null,

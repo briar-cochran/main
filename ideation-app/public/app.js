@@ -268,12 +268,28 @@ function renderStack() {
 function buildCard(idea, layer) {
   const el = document.createElement('div');
   el.className = `idea-card ${layer}`;
+  const src = idea.source;
+  const sourceRow = src && src.url
+    ? `<a class="source-link" href="${escapeHtml(src.url)}" target="_blank" rel="noopener noreferrer">
+         <span class="source-arrow">↗</span>
+         <span class="source-text">${escapeHtml(src.creator || src.title || 'View original')}${src.metric ? ` <span class="source-metric">${escapeHtml(src.metric)}</span>` : ''}</span>
+       </a>`
+    : '';
   el.innerHTML = `
     <div class="swipe-badge"></div>
     <div class="angle">${escapeHtml(idea.angle)}</div>
     <h3>${escapeHtml(idea.title)}</h3>
-    <p class="hook">${escapeHtml(idea.hook)}</p>
-    ${idea.format ? `<div class="format">${escapeHtml(idea.format)}</div>` : ''}`;
+    <div class="card-body">
+      <p class="hook">${escapeHtml(idea.hook)}</p>
+      ${idea.ost ? `<p class="ost"><span class="ost-label">On screen</span>${escapeHtml(idea.ost)}</p>` : ''}
+    </div>
+    <div class="card-footer">
+      ${idea.format ? `<div class="format">${escapeHtml(idea.format)}</div>` : ''}
+      ${sourceRow}
+    </div>`;
+  // Tapping the source opens the reference; it must not start a swipe.
+  const link = el.querySelector('.source-link');
+  if (link) link.addEventListener('pointerdown', (e) => e.stopPropagation());
   if (layer === 'top') attachSwipe(el);
   return el;
 }
@@ -373,6 +389,57 @@ let audioBlob = null;
 let recorderTimer = null;
 let dictationNudge = null;
 
+// ---- Live input meter (proof the mic is actually hearing you) ----
+
+let audioCtx = null;
+let meterRAF = null;
+const METER_BARS = 21;
+
+function meterEl() {
+  const m = $('#audio-meter');
+  if (m && !m.children.length) {
+    for (let i = 0; i < METER_BARS; i++) m.appendChild(document.createElement('span'));
+  }
+  return m;
+}
+
+function startMeter(stream) {
+  const m = meterEl();
+  if (!m) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.55;
+    audioCtx.createMediaStreamSource(stream).connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const bars = m.children;
+    m.classList.add('live');
+    const draw = () => {
+      analyser.getByteFrequencyData(data);
+      for (let i = 0; i < bars.length; i++) {
+        // Voice lives in the lower half of the spectrum; spread bars across it.
+        const v = data[Math.floor((i * data.length) / bars.length / 2)] / 255;
+        bars[i].style.transform = `scaleY(${Math.max(0.12, v).toFixed(3)})`;
+      }
+      meterRAF = requestAnimationFrame(draw);
+    };
+    draw();
+  } catch (_) {
+    /* meter is a nicety; recording still works without it */
+  }
+}
+
+function stopMeter() {
+  if (meterRAF) { cancelAnimationFrame(meterRAF); meterRAF = null; }
+  if (audioCtx) { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
+  const m = $('#audio-meter');
+  if (m) {
+    m.classList.remove('live');
+    for (const bar of m.children) bar.style.transform = 'scaleY(0.12)';
+  }
+}
+
 // Bound the memo length ("1-3 sentences") so an overlay left open doesn't
 // record indefinitely and blow past the upload size cap.
 const MAX_RECORD_MS = 180_000;
@@ -402,11 +469,14 @@ async function startCapture() {
     mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
     audioChunks = [];
     mediaRecorder.ondataavailable = (e) => { if (e.data.size) audioChunks.push(e.data); };
+    const mr = mediaRecorder;
     mediaRecorder.onstop = () => {
-      audioBlob = audioChunks.length ? new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' }) : null;
+      audioBlob = audioChunks.length ? new Blob(audioChunks, { type: mr.mimeType || 'audio/webm' }) : null;
       stream.getTracks().forEach((t) => t.stop());
+      stopMeter();
     };
     mediaRecorder.start();
+    startMeter(stream);
     mic.classList.add('recording');
     $('#mic-status').textContent = 'Listening… speak now';
     recorderTimer = setTimeout(() => {
@@ -464,6 +534,7 @@ function stopCapture() {
   return new Promise((resolve) => {
     if (recorderTimer) { clearTimeout(recorderTimer); recorderTimer = null; }
     if (dictationNudge) { clearTimeout(dictationNudge); dictationNudge = null; }
+    stopMeter();
     if (recognition) { try { recognition.stop(); } catch (_) {} recognition = null; }
     $('#mic-visual').classList.remove('recording');
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
