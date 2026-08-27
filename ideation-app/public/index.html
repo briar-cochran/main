@@ -3,6 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F2F2F7" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💡</text></svg>" />
   <title>Idea Ranker</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
@@ -19,10 +23,10 @@
       <label>Client name
         <input id="client-name" type="text" placeholder="e.g. Acme Fitness" />
       </label>
-      <label>Client slug <span class="hint">(optional — used to attribute exports later)</span>
+      <label>Client slug <span class="hint">(optional, used to attribute exports later)</span>
         <input id="client-slug" type="text" placeholder="e.g. faiez-rana" />
       </label>
-      <label>Client brief <span class="hint">(niche, audience, goals, voice — the more the better)</span>
+      <label>Client brief <span class="hint">(niche, audience, goals, voice: the more the better)</span>
         <textarea id="client-brief" rows="5" placeholder="Who is this client, who is their audience, what do they sell, what do they want to be known for..."></textarea>
       </label>
       <label>Ideas to generate
@@ -54,20 +58,21 @@
       <button class="rate like" data-rating="like" title="Like (3)"><span>👍</span>Like</button>
       <button class="rate love" data-rating="love" title="Love (4)"><span>❤️</span>Love</button>
     </div>
-    <p class="key-hint">Keys: 1 hate · 2 dislike · 3 like · 4 love — or swipe: left hate, down dislike, up like, right love</p>
+    <p class="key-hint">Keys: 1 hate · 2 dislike · 3 like · 4 love. Or swipe: left hate, down dislike, up like, right love</p>
   </section>
 
   <!-- Voice reason overlay -->
   <div id="reason-overlay" class="overlay hidden">
     <div class="reason-card">
+      <div class="grabber"></div>
       <div id="reason-rating-chip" class="chip"></div>
-      <h2>In 1–3 sentences, explain why.</h2>
+      <h2>In a few sentences, tell us why.</h2>
       <div id="mic-visual" class="mic">
         <div class="mic-ring"></div>
         <div class="mic-icon">🎙️</div>
       </div>
       <p id="mic-status" class="mic-status">Starting microphone…</p>
-      <textarea id="reason-text" rows="3" placeholder="Your reason appears here — you can also type or edit it."></textarea>
+      <textarea id="reason-text" rows="3" placeholder="Your reason appears here. You can also type or edit it."></textarea>
       <div class="reason-actions">
         <button id="btn-skip-reason" class="ghost">Skip</button>
         <button id="btn-save-reason" class="primary">Save &amp; next</button>

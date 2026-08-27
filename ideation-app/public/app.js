@@ -371,6 +371,7 @@ let mediaRecorder = null;
 let audioChunks = [];
 let audioBlob = null;
 let recorderTimer = null;
+let dictationNudge = null;
 
 // Bound the memo length ("1-3 sentences") so an overlay left open doesn't
 // record indefinitely and blow past the upload size cap.
@@ -383,6 +384,7 @@ function openReasonOverlay(rating) {
   chip.className = `chip ${rating}`;
   $('#reason-text').value = '';
   $('#mic-status').textContent = 'Starting microphone…';
+  $('#mic-status').classList.remove('warn');
   state.voiceUsed = false;
   audioBlob = null;
   $('#reason-overlay').classList.remove('hidden');
@@ -415,7 +417,9 @@ async function startCapture() {
       }
     }, MAX_RECORD_MS);
   } catch (err) {
-    $('#mic-status').textContent = 'Mic unavailable — type your reason instead.';
+    // Make this LOUD: a silent mic failure means the "why" never gets captured.
+    $('#mic-status').textContent = '🎤 Microphone is off. Allow mic access in your browser, or type your reason below.';
+    $('#mic-status').classList.add('warn');
     $('#reason-text').focus();
   }
 
@@ -438,12 +442,28 @@ async function startCapture() {
     };
     recognition.onerror = () => {};
     try { recognition.start(); } catch (_) {}
+  } else if (mediaRecorder && mediaRecorder.state === 'recording') {
+    $('#mic-status').textContent = 'Recording audio. Live dictation is not supported in this browser, type your reason below.';
+    $('#mic-status').classList.add('warn');
   }
+
+  // Speech engines can silently hear nothing (muted input, wrong device).
+  // If we are 6s in with zero words, tell the user instead of losing the why.
+  const recording = mediaRecorder && mediaRecorder.state === 'recording';
+  dictationNudge = setTimeout(() => {
+    if (!state.voiceUsed && !$('#reason-text').value.trim() && !$('#reason-overlay').classList.contains('hidden')) {
+      $('#mic-status').textContent = recording
+        ? 'Not hearing any words. Your audio is still recording, but type your reason to be safe.'
+        : 'Nothing is being captured. Type your reason below.';
+      $('#mic-status').classList.add('warn');
+    }
+  }, 6000);
 }
 
 function stopCapture() {
   return new Promise((resolve) => {
     if (recorderTimer) { clearTimeout(recorderTimer); recorderTimer = null; }
+    if (dictationNudge) { clearTimeout(dictationNudge); dictationNudge = null; }
     if (recognition) { try { recognition.stop(); } catch (_) {} recognition = null; }
     $('#mic-visual').classList.remove('recording');
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
