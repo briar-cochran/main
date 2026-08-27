@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.log
 .env
+ideation-app/data/audio/

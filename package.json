@@ -2,8 +2,9 @@
   "name": "figma-slides-agent-workspace",
   "version": "1.0.0",
   "private": true,
-  "workspaces": ["server", "agent", "plugin"],
+  "workspaces": ["server", "agent", "plugin", "ideation-app"],
   "scripts": {
+    "ideation": "cd ideation-app && npm run dev",
     "server": "cd server && npm run dev",
     "agent": "cd agent && npm run dev",
     "build:plugin": "cd plugin && npm run build",
