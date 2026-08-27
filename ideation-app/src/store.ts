@@ -27,6 +27,12 @@ export interface GenerationStatus {
   target: number;
   generated: number;
   error: string | null;
+  // Monotonic batch counter driving lens rotation (short batches would skew a
+  // count derived from ideas.length). Optional: pre-existing sessions lack it.
+  batches?: number;
+  // Set while a generate-batch call is running so a second open tab doesn't
+  // pay for a duplicate batch; stale claims expire after BATCH_CLAIM_MS.
+  inFlightAt?: number | null;
 }
 
 export interface RankingSession {
@@ -86,8 +92,10 @@ class FileStore implements Store {
     fs.mkdirSync(this.audioDir, { recursive: true });
   }
 
-  private sessionPath(id: string): string {
-    if (!/^[a-zA-Z0-9-]+$/.test(id)) throw new Error('invalid session id');
+  // Malformed ids (anything a URL can carry) mean "no such session", not an
+  // exception — ids only come from user-supplied paths and our own UUIDs.
+  private sessionPath(id: string): string | null {
+    if (!/^[a-zA-Z0-9-]+$/.test(id)) return null;
     return path.join(this.sessionsDir, `${id}.json`);
   }
 
@@ -99,12 +107,13 @@ class FileStore implements Store {
 
   async loadSession(id: string): Promise<RankingSession | null> {
     const file = this.sessionPath(id);
-    if (!fs.existsSync(file)) return null;
+    if (!file || !fs.existsSync(file)) return null;
     return JSON.parse(fs.readFileSync(file, 'utf8')) as RankingSession;
   }
 
   async saveSession(session: RankingSession): Promise<void> {
     const file = this.sessionPath(session.id);
+    if (!file) throw new Error('invalid session id');
     fs.writeFileSync(`${file}.tmp`, JSON.stringify(session, null, 2));
     fs.renameSync(`${file}.tmp`, file);
   }
@@ -117,14 +126,18 @@ class FileStore implements Store {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  // Exactly <uuid-ish>.<ext> — a single dot. Blocks '..' (which the old
+  // dots-and-dashes regex let through to path.join) and the '.mime' sidecars.
+  private static AUDIO_NAME = /^[a-zA-Z0-9-]+\.[a-zA-Z0-9]+$/;
+
   async saveAudio(name: string, data: Buffer, mime: string): Promise<void> {
-    if (!/^[a-zA-Z0-9.-]+$/.test(name)) throw new Error('invalid audio name');
+    if (!FileStore.AUDIO_NAME.test(name)) throw new Error('invalid audio name');
     fs.writeFileSync(path.join(this.audioDir, name), data);
     fs.writeFileSync(path.join(this.audioDir, `${name}.mime`), mime);
   }
 
   async getAudio(name: string): Promise<{ data: Buffer; mime: string } | null> {
-    if (!/^[a-zA-Z0-9.-]+$/.test(name)) return null;
+    if (!FileStore.AUDIO_NAME.test(name)) return null;
     const file = path.join(this.audioDir, name);
     if (!fs.existsSync(file)) return null;
     const mimeFile = `${file}.mime`;

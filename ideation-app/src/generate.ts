@@ -36,13 +36,15 @@ const FORMATS =
   'yap (direct-to-camera), green-screen reveal, ranking, tier list, bracket, split-screen, before/after board, scorecard, mirror-board, notes-app reveal, case-study teardown, reaction, listicle, whiteboard breakdown';
 
 const IdeaBatchSchema = z.object({
-  ideas: z.array(
-    z.object({
-      title: z.string().describe('A concise, specific content idea title (not clickbait, not generic)'),
-      hook: z.string().describe('One sentence: the opening line or core tension that makes this worth talking about'),
-      format: z.string().describe(`Suggested format, one of: ${FORMATS}`),
-    }),
-  ),
+  ideas: z
+    .array(
+      z.object({
+        title: z.string().describe('A concise, specific content idea title (not clickbait, not generic)'),
+        hook: z.string().describe('One sentence: the opening line or core tension that makes this worth talking about'),
+        format: z.string().describe(`Suggested format, one of: ${FORMATS}`),
+      }),
+    )
+    .min(1),
 });
 
 function batchPrompt(session: RankingSession, lens: string, count: number): string {
@@ -75,7 +77,10 @@ Rules:
  * batch number so consecutive batches take different creative angles.
  */
 export async function generateBatch(session: RankingSession, count: number) {
-  const batchNumber = Math.floor(session.ideas.length / BATCH_SIZE);
+  // Prefer the persisted monotonic counter; fall back to deriving from the
+  // idea count for sessions created before the counter existed. A count-based
+  // number would reuse a lens whenever a batch came back short.
+  const batchNumber = session.generation.batches ?? Math.floor(session.ideas.length / BATCH_SIZE);
   const lens = LENSES[batchNumber % LENSES.length];
 
   const response = await client.messages.parse({
@@ -87,6 +92,7 @@ export async function generateBatch(session: RankingSession, count: number) {
 
   const parsed = response.parsed_output;
   if (!parsed) throw new Error('model returned unparseable output');
+  if (parsed.ideas.length === 0) throw new Error('model returned an empty batch');
 
   const shortLens = lens.split('—')[0].trim();
   return parsed.ideas.slice(0, count).map((idea) => makeIdea({ ...idea, angle: shortLens }));

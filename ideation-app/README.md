@@ -127,15 +127,34 @@ specific pipeline, which this app deliberately does not touch.
 |---|---|---|---|
 | GET | `/api/sessions` | admin | List session summaries |
 | POST | `/api/sessions` | admin | Create session (`clientName`, `clientSlug?`, `brief`, `target?`, `ideas?`) |
-| GET | `/api/sessions/:id` | link | Full session |
-| POST | `/api/sessions/:id/generate` | link | Set/raise the generation target |
-| POST | `/api/sessions/:id/generate-batch` | link | Generate one batch (frontend loops until target) |
+| GET | `/api/sessions/:id` | link | Session for the ranking UI (the internal `brief` is omitted) |
+| POST | `/api/sessions/:id/generate` | admin | Set/raise the generation target (spend control) |
+| POST | `/api/sessions/:id/generate-batch` | link | Generate one batch toward the existing target (frontend loops; retries after an error) |
 | POST | `/api/sessions/:id/ideas/:ideaId/rating` | link | `{rating: love\|like\|dislike\|hate}` |
 | POST | `/api/sessions/:id/ideas/:ideaId/reason` | link | `{transcript, inputMethod}` |
-| POST | `/api/sessions/:id/ideas/:ideaId/audio` | link | Raw audio body → stored blob |
+| POST | `/api/sessions/:id/ideas/:ideaId/audio` | link | Raw audio body (≤4mb) → stored blob |
 | GET | `/audio/:name` | link | Play back a saved voice memo |
-| GET | `/api/sessions/:id/export` | link | Flat catalog JSON |
-| GET | `/api/sessions/:id/export.jsonl` | link | Feedback JSONL download (skill-compatible format) |
+| GET | `/api/sessions/:id/export` | admin | Flat catalog JSON (includes the brief) |
+| GET | `/api/sessions/:id/export.jsonl` | admin | Feedback JSONL download (skill-compatible format) |
 
-"admin" = requires `x-admin-key` header when `ADMIN_KEY` is set; "link" =
-anyone with the session UUID.
+"admin" = requires the `ADMIN_KEY` (as an `x-admin-key` header or a `?key=`
+query param — the export download links use the latter) whenever `ADMIN_KEY`
+is set; "link" = anyone with the session UUID. The client link can pump
+batches toward a target an admin set, but cannot raise the target or pull the
+catalog — holding a link is not a spend or export capability.
+
+Reliability notes:
+
+- Every rating/reason/audio write from the browser goes through a serial
+  retry queue — failures show a "Saving…/retrying" pill instead of silently
+  dropping catalog data, and the transcript + audio for one idea are saved in
+  order so they can't overwrite each other.
+- Audio bodies are capped at 4mb because Vercel rejects serverless request
+  bodies over ~4.5MB regardless of app config; recording auto-stops after 3
+  minutes. Speech-only memos are ~180KB/minute, nowhere near the cap.
+- A failed generation is resumable: the header shows "gen failed — tap to
+  retry", and a `generation.status` of `error` just means the next
+  `generate-batch` call retries. A session showing `running` with no browser
+  open simply resumes when any tab opens the link.
+- Two tabs pumping the same session (admin + client) coordinate through a
+  short-lived in-flight claim so they don't pay for duplicate batches.

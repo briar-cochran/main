@@ -107,6 +107,23 @@ button {
 #progress-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.3s; }
 #progress-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .gen-status { font-size: 11px; color: var(--accent); white-space: nowrap; }
+.gen-status.retry { color: #f5a623; cursor: pointer; text-decoration: underline; }
+
+/* Unsaved-writes pill (bottom center, above everything) */
+.save-status {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  z-index: 100;
+}
+.save-status.failing { border-color: #f5a623; color: #f5a623; }
 
 .card-stack {
   position: relative;

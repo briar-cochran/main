@@ -9,6 +9,14 @@ const $ = (sel) => document.querySelector(sel);
 const CLIENT_MODE = location.pathname.startsWith('/r/');
 const CLIENT_SESSION_ID = CLIENT_MODE ? location.pathname.split('/')[2] : null;
 
+// On a client link, hide the admin home immediately — it is the default
+// visible view in the markup and would otherwise flash (and be interactive)
+// until the session fetch resolves.
+if (CLIENT_MODE) {
+  document.querySelectorAll('.view').forEach((v) => v.classList.add('hidden'));
+  document.body.insertAdjacentHTML('beforeend', '<p id="client-loading" style="padding:40px;text-align:center;color:#9aa1b5">Loading your ideas…</p>');
+}
+
 // ---------- API ----------
 
 function adminHeaders() {
@@ -44,6 +52,58 @@ const api = {
     fetch(`/api/sessions/${sid}/ideas/${iid}/audio`, { method: 'POST', headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob }),
 };
 
+// ---------- Persistence queue ----------
+// Every catalog write (rating, reason, audio) goes through one serial queue:
+// writes never race each other client-side (the server does whole-document
+// read-modify-write saves, so two in-flight writes could drop each other's
+// field), failures retry with backoff instead of being silently swallowed,
+// and the indicator shows when anything is still unsaved.
+
+let pendingSaves = 0;
+let saveFailing = false;
+let writeChain = Promise.resolve();
+
+function updateSaveStatus() {
+  const el = $('#save-status');
+  if (!el) return;
+  if (pendingSaves === 0) {
+    el.classList.add('hidden');
+  } else {
+    el.classList.remove('hidden');
+    el.textContent = saveFailing ? '⚠ connection trouble — retrying…' : 'Saving…';
+    el.classList.toggle('failing', saveFailing);
+  }
+}
+
+function persist(label, fn) {
+  pendingSaves++;
+  updateSaveStatus();
+  writeChain = writeChain.then(async () => {
+    let delay = 2000;
+    for (;;) {
+      try {
+        const res = await fn();
+        if (res.ok) break;
+        // 4xx = the request itself is bad; retrying will never help.
+        if (res.status >= 400 && res.status < 500) {
+          console.warn(`${label} rejected (${res.status})`);
+          break;
+        }
+      } catch (_) {
+        /* network error — retry */
+      }
+      saveFailing = true;
+      updateSaveStatus();
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 30000);
+    }
+    saveFailing = false;
+    pendingSaves--;
+    updateSaveStatus();
+  });
+  return writeChain;
+}
+
 const RATING_META = {
   love: { emoji: '❤️', label: 'LOVE', color: '#ff4d6d' },
   like: { emoji: '👍', label: 'LIKE', color: '#3ecf8e' },
@@ -62,6 +122,8 @@ let state = {
 // ---------- Views ----------
 
 function show(viewId) {
+  const loading = $('#client-loading');
+  if (loading) loading.remove();
   ['view-home', 'view-rank', 'view-done'].forEach((id) => $('#' + id).classList.add('hidden'));
   $('#' + viewId).classList.remove('hidden');
 }
@@ -146,9 +208,20 @@ function renderProgress() {
   $('#progress-fill').style.width = total ? `${(rated / total) * 100}%` : '0%';
   $('#progress-label').textContent = `${rated} / ${total}`;
   const g = state.session.generation;
-  $('#gen-status').textContent =
-    g.status === 'running' ? `✨ ${g.generated}/${g.target}` : g.status === 'error' ? '⚠ gen failed' : '';
+  const el = $('#gen-status');
+  const failed = g.status === 'error' && state.session.ideas.length < g.target;
+  el.textContent = g.status === 'running' ? `✨ ${g.generated}/${g.target}` : failed ? '⚠ gen failed — tap to retry' : '';
+  el.classList.toggle('retry', failed);
 }
+
+// The server treats an 'error' generation as resumable: the next
+// generate-batch call simply retries. This is the UI for that.
+$('#gen-status').onclick = () => {
+  if (!state.session || state.session.generation.status !== 'error') return;
+  state.session.generation.status = 'running';
+  renderProgress();
+  pumpGeneration();
+};
 
 function renderStack() {
   const stack = $('#card-stack');
@@ -251,8 +324,8 @@ async function rateCurrent(rating) {
   const idea = state.queue[0];
   if (!idea || state.current) return;
   state.current = { idea, rating };
-  idea.rating = rating; // optimistic
-  api.rate(state.session.id, idea.id, rating).catch(() => {});
+  idea.rating = rating; // optimistic — the queue retries until it lands
+  persist('rating', () => api.rate(state.session.id, idea.id, rating));
   renderProgress();
   openReasonOverlay(rating);
 }
@@ -263,6 +336,11 @@ let recognition = null;
 let mediaRecorder = null;
 let audioChunks = [];
 let audioBlob = null;
+let recorderTimer = null;
+
+// Bound the memo length ("1-3 sentences") so an overlay left open doesn't
+// record indefinitely and blow past the upload size cap.
+const MAX_RECORD_MS = 180_000;
 
 function openReasonOverlay(rating) {
   const m = RATING_META[rating];
@@ -295,6 +373,13 @@ async function startCapture() {
     mediaRecorder.start();
     mic.classList.add('recording');
     $('#mic-status').textContent = 'Listening… speak now';
+    recorderTimer = setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        mic.classList.remove('recording');
+        $('#mic-status').textContent = 'Recording stopped (max length) — you can still edit the text.';
+      }
+    }, MAX_RECORD_MS);
   } catch (err) {
     $('#mic-status').textContent = 'Mic unavailable — type your reason instead.';
     $('#reason-text').focus();
@@ -324,6 +409,7 @@ async function startCapture() {
 
 function stopCapture() {
   return new Promise((resolve) => {
+    if (recorderTimer) { clearTimeout(recorderTimer); recorderTimer = null; }
     if (recognition) { try { recognition.stop(); } catch (_) {} recognition = null; }
     $('#mic-visual').classList.remove('recording');
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -337,20 +423,38 @@ function stopCapture() {
   });
 }
 
+// Vercel rejects serverless request bodies over ~4.5MB, and the server caps
+// audio at 4mb to match. Speech-only opus is ~24kbps, so this only trips on
+// something pathological — in which case we keep the transcript and drop the
+// blob rather than failing the whole save.
+const MAX_AUDIO_BYTES = 4 * 1024 * 1024;
+
 $('#btn-save-reason').onclick = async () => {
   await stopCapture();
   const { idea } = state.current;
   const transcript = $('#reason-text').value.trim();
   const method = transcript ? (state.voiceUsed ? 'voice' : 'typed') : 'skipped';
-  api.reason(state.session.id, idea.id, transcript, method).catch(() => {});
-  if (audioBlob && audioBlob.size > 0) api.audio(state.session.id, idea.id, audioBlob).catch(() => {});
+  const blob = audioBlob && audioBlob.size > 0 && audioBlob.size <= MAX_AUDIO_BYTES ? audioBlob : null;
+
+  // One queue entry for the pair, audio strictly before reason: the reason
+  // handler preserves an existing audioFile, so this order can't lose either
+  // half — firing both at once could (whole-document saves race server-side).
+  persist('reason', async () => {
+    if (blob) {
+      const ra = await api.audio(state.session.id, idea.id, blob);
+      // 5xx/network → throw so the whole pair retries; 4xx → keep the transcript.
+      if (!ra.ok && ra.status >= 500) throw new Error(`audio upload ${ra.status}`);
+      if (!ra.ok) console.warn(`audio upload rejected (${ra.status})`);
+    }
+    return api.reason(state.session.id, idea.id, transcript, method);
+  });
   closeReasonAndAdvance();
 };
 
 $('#btn-skip-reason').onclick = async () => {
   await stopCapture();
   const { idea } = state.current;
-  api.reason(state.session.id, idea.id, '', 'skipped').catch(() => {});
+  persist('reason', () => api.reason(state.session.id, idea.id, '', 'skipped'));
   closeReasonAndAdvance();
 };
 
@@ -368,16 +472,33 @@ function closeReasonAndAdvance() {
 // request until the target is reached. Serverless-friendly — no long-running
 // job on the server.
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Pull ideas another tab's pump has generated into our local state.
+async function refreshSessionIdeas() {
+  const latest = await api.getSession(state.session.id);
+  if (latest.error) return;
+  const known = new Set(state.session.ideas.map((i) => i.id));
+  for (const idea of latest.ideas) {
+    if (!known.has(idea.id)) {
+      state.session.ideas.push(idea);
+      if (!idea.rating) state.queue.push(idea);
+    }
+  }
+  state.session.generation = latest.generation;
+}
+
 async function pumpGeneration() {
   if (state.pumping || state.session.generation.status !== 'running') return;
   state.pumping = true;
+  let noProgress = 0;
   try {
     while (state.session && state.session.generation.status === 'running') {
       let result;
       try {
         result = await api.generateBatch(state.session.id);
       } catch (_) {
-        await new Promise((r) => setTimeout(r, 5000));
+        await sleep(5000);
         continue;
       }
       if (result.error) {
@@ -385,13 +506,32 @@ async function pumpGeneration() {
         renderProgress();
         break;
       }
+      // Another tab holds the batch claim — wait, then pick up its ideas.
+      if (result.busy) {
+        await sleep(5000);
+        try { await refreshSessionIdeas(); } catch (_) {}
+        renderProgress();
+        if (!$('#card-stack .idea-card.top') && !state.current) renderStack();
+        if (state.session.generation.status === 'done') break;
+        continue;
+      }
       state.session.generation = result.generation;
-      const known = new Set(state.session.ideas.map((i) => i.id));
-      for (const idea of result.newIdeas || []) {
-        if (!known.has(idea.id)) {
-          state.session.ideas.push(idea);
-          state.queue.push(idea);
+      const fresh = (result.newIdeas || []).filter((idea) => !state.session.ideas.some((i) => i.id === idea.id));
+      for (const idea of fresh) {
+        state.session.ideas.push(idea);
+        state.queue.push(idea);
+      }
+      // Backstop against a pathological server loop: batches that add nothing
+      // but keep reporting 'running' should not spin (and spend) forever.
+      if (!result.done && fresh.length === 0) {
+        if (++noProgress >= 3) {
+          state.session.generation.status = 'error';
+          renderProgress();
+          break;
         }
+        await sleep(2000);
+      } else {
+        noProgress = 0;
       }
       renderProgress();
       if (!$('#card-stack .idea-card.top') && !state.current) renderStack();
@@ -426,8 +566,12 @@ function maybeDone() {
     jsonlLink.classList.add('hidden');
     $('#btn-done-home').classList.add('hidden');
   } else {
-    exportLink.href = `/api/sessions/${state.session.id}/export`;
-    jsonlLink.href = `/api/sessions/${state.session.id}/export.jsonl`;
+    // Exports are admin-gated; plain <a> downloads can't send headers, so the
+    // key travels as a query param (ignored by the server when ADMIN_KEY is unset).
+    const key = localStorage.getItem('adminKey');
+    const auth = key ? `?key=${encodeURIComponent(key)}` : '';
+    exportLink.href = `/api/sessions/${state.session.id}/export${auth}`;
+    jsonlLink.href = `/api/sessions/${state.session.id}/export.jsonl${auth}`;
   }
   show('view-done');
 }

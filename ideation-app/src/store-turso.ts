@@ -79,6 +79,10 @@ export class TursoStore implements Store {
     const rs = await this.db.execute({ sql: 'SELECT mime, data FROM ranking_audio WHERE name = ?', args: [name] });
     if (rs.rows.length === 0) return null;
     const row = rs.rows[0];
-    return { data: Buffer.from(row.data as ArrayBuffer), mime: row.mime as string };
+    // libsql may hand BLOBs back as ArrayBuffer or Uint8Array depending on
+    // transport; Buffer.from(ArrayBuffer) on a Uint8Array would misread it.
+    const raw = row.data as ArrayBuffer | Uint8Array;
+    const data = raw instanceof Uint8Array ? Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength) : Buffer.from(raw);
+    return { data, mime: row.mime as string };
   }
 }
