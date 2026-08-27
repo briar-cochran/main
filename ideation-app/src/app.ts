@@ -252,9 +252,10 @@ app.get('/api/sessions/:id/export', async (req, res) => {
   });
 });
 
-// JSONL in the Oakline ideation skill's feedback-memory format — append these
-// lines to 01-clients/{slug}/feedback/ideation-feedback.jsonl and the skill
-// picks them up on its next run (SKILL.md, Inputs §3).
+// Manual JSONL download, shaped like the ideation skill's feedback-memory
+// entries so the data won't need reshaping if we later decide to integrate.
+// Deliberately NOT wired to the oakline vault — the app never writes there;
+// this catalog stays isolated until integration is decided.
 app.get('/api/sessions/:id/export.jsonl', async (req, res) => {
   const session = await getStore().loadSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'not found' });

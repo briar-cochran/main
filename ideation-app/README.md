@@ -5,8 +5,13 @@ send them a private link, and they swipe through each one
 (**love / like / dislike / hate**). Right after every rating a microphone pops
 up asking them to *"explain why in 1–3 sentences"* — voice is dictated live into
 text and the raw audio is saved too. The output is a per-client **catalog** of
-ideas + ratings + reasons that feeds the Oakline ideation skill's feedback
-memory.
+ideas + ratings + reasons.
+
+> **Isolation rule:** this catalog lives ONLY in the app's own store (Turso in
+> production, `ideation-app/data/` locally). Nothing here reads from or writes
+> to the oakline vault — no `01-clients/` files, no `feedback/*.jsonl`, no
+> lessons. The exports are manual downloads; whether/how they ever feed the
+> ideation skill's pipeline is a separate, deliberate decision for later.
 
 ## Two modes
 
@@ -71,28 +76,27 @@ practice spreads ideas out *conceptually* rather than just rephrasing them:
   green-screen reveal, ranking, tier list, bracket, split-screen, mirror-board,
   notes-app reveal, …).
 
-## Oakline ideation-skill integration
+## Future ideation-skill integration (not wired up — by design)
 
-The ideation skill (`oakline/04-skills/ideation`) already reads per-client
-feedback from `01-clients/{slug}/feedback/ideation-feedback.jsonl`
-(SKILL.md, Inputs §3). This app exports that exact format:
+The catalog stays isolated in this app until we're sure how it should plug
+into the ideation skill's pipeline. What exists today is *format
+compatibility only*, so the data won't need reshaping later:
 
 - **`GET /api/sessions/:id/export.jsonl`** — one line per rated idea,
   `{at, channel: "idea-ranker", client: <slug>, feedback, id, type}` with
   `type` mapped love/like → `positive`, dislike/hate → `negative`, and the
-  client's spoken "why" embedded in `feedback`. Append these lines to the
-  client's `ideation-feedback.jsonl` and the next skill run picks them up.
-- Sessions carry a **client slug** matching `01-clients/{slug}` so the export
-  lands on the right client.
-- Skill-generated ideas can be ranked directly: `POST /api/sessions` accepts
-  `ideas: [{title, hook?, angle?, format?}]` (e.g. from a delivered
-  `deliveries/ideation/{date}-ideas.md` batch) instead of / in addition to
-  generating.
+  client's spoken "why" embedded in `feedback`. This matches the shape of the
+  skill's feedback-memory entries, but it is a manual download — the app never
+  touches the vault.
+- Sessions carry an optional **client slug** so exports are attributable to
+  the right client whenever integration happens.
+- Externally generated idea batches can be imported for ranking:
+  `POST /api/sessions` accepts `ideas: [{title, hook?, angle?, format?}]`
+  instead of / in addition to generating.
 
-The built-in generator is the lightweight stand-in for taste-calibration runs;
-the full skill is reference-first (TubeLab/Apify research). To mirror it
-exactly, swap the skill's angle taxonomy into `LENSES` / `batchPrompt()` in
-`src/generate.ts`.
+The built-in generator is a lightweight stand-in for taste-calibration runs;
+the full skill is reference-first (TubeLab/Apify research) with its own
+specific pipeline, which this app deliberately does not touch.
 
 ## Catalog format (JSON export)
 
@@ -131,7 +135,7 @@ exactly, swap the skill's angle taxonomy into `LENSES` / `batchPrompt()` in
 | POST | `/api/sessions/:id/ideas/:ideaId/audio` | link | Raw audio body → stored blob |
 | GET | `/audio/:name` | link | Play back a saved voice memo |
 | GET | `/api/sessions/:id/export` | link | Flat catalog JSON |
-| GET | `/api/sessions/:id/export.jsonl` | link | Oakline `ideation-feedback.jsonl` lines |
+| GET | `/api/sessions/:id/export.jsonl` | link | Feedback JSONL download (skill-compatible format) |
 
 "admin" = requires `x-admin-key` header when `ADMIN_KEY` is set; "link" =
 anyone with the session UUID.
