@@ -16,8 +16,10 @@ app.get('/r/:id', (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html'
 const RATINGS: Rating[] = ['love', 'like', 'dislike', 'hate'];
 const MAX_IDEAS = 300;
 // A generate-batch claim older than this is considered dead (crashed/timed-out
-// invocation) and another tab may pick the work up.
-const BATCH_CLAIM_MS = 120_000;
+// invocation) and another tab may pick the work up. MUST exceed the function's
+// maxDuration (300s in vercel.json): a claim that can expire while its batch
+// is still legitimately running invites a second tab to double-pay for it.
+const BATCH_CLAIM_MS = 330_000;
 
 // Express 4 does not forward async handler rejections; without this wrapper a
 // thrown store/API error hangs the request (and crashes the local process).
@@ -30,21 +32,16 @@ const wrap = (fn: Handler): express.RequestHandler => (req, res, next) => {
 
 // ---- Admin gate ----
 // Set ADMIN_KEY in the environment to lock the admin surface: session
-// listing/creation, raising generation targets, and exports. The key is
-// accepted as an x-admin-key header or a ?key= query param (the export
-// download links can't send headers). Per-idea endpoints stay open: the
+// listing/creation, raising generation targets, and exports. Header-only on
+// purpose — a ?key= query param would leak the key into browser history,
+// Referer headers, and access logs (exports download via fetch+blob instead
+// of plain links for exactly this reason). Per-idea endpoints stay open: the
 // unguessable session UUID in the /r/<id> link is the client's capability.
-function suppliedKey(req: express.Request): string {
-  const header = req.headers['x-admin-key'];
-  if (typeof header === 'string') return header;
-  const query = req.query.key;
-  return typeof query === 'string' ? query : '';
-}
-
 function isAdmin(req: express.Request): boolean {
   const key = process.env.ADMIN_KEY;
   if (!key) return true;
-  const provided = Buffer.from(suppliedKey(req));
+  const header = req.headers['x-admin-key'];
+  const provided = Buffer.from(typeof header === 'string' ? header : '');
   const expected = Buffer.from(key);
   return provided.length === expected.length && timingSafeEqual(provided, expected);
 }
@@ -180,7 +177,7 @@ app.post('/api/sessions/:id/generate-batch', wrap(async (req, res) => {
       target: fresh.generation.target,
       generated: fresh.ideas.length,
       error: null,
-      batches: (fresh.generation.batches ?? Math.floor(session.ideas.length / BATCH_SIZE)) + 1,
+      batches: (fresh.generation.batches ?? Math.floor((fresh.ideas.length - newIdeas.length) / BATCH_SIZE)) + 1,
       inFlightAt: null,
     };
     await store.saveSession(fresh);
@@ -188,14 +185,23 @@ app.post('/api/sessions/:id/generate-batch', wrap(async (req, res) => {
   } catch (err) {
     // Re-load here too: saving the pre-batch snapshot would silently revert
     // every rating/reason the client recorded while the batch was generating.
-    const fresh = (await store.loadSession(req.params.id).catch(() => null)) ?? session;
-    fresh.generation = {
-      ...fresh.generation,
-      status: 'error',
-      error: (err as Error).message,
-      inFlightAt: null,
-    };
-    await store.saveSession(fresh);
+    // If the re-load itself fails (store down), save NOTHING — the stale
+    // in-flight claim just expires and the pump retries — rather than write a
+    // snapshot that reverts the client's work.
+    try {
+      const fresh = await store.loadSession(req.params.id);
+      if (fresh) {
+        fresh.generation = {
+          ...fresh.generation,
+          status: 'error',
+          error: (err as Error).message,
+          inFlightAt: null,
+        };
+        await store.saveSession(fresh);
+      }
+    } catch (_) {
+      /* leave the claim to expire */
+    }
     res.status(500).json({ error: (err as Error).message });
   }
 }));
@@ -289,6 +295,7 @@ app.get('/api/sessions/:id/export', requireAdmin, wrap(async (req, res) => {
   const session = await getStore().loadSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'not found' });
 
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     client: session.clientName,
     clientSlug: session.clientSlug,
@@ -340,6 +347,7 @@ app.get('/api/sessions/:id/export.jsonl', requireAdmin, wrap(async (req, res) =>
     });
 
   res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-store');
   res.setHeader(
     'Content-Disposition',
     `attachment; filename="${clientSlug}-ideation-feedback.jsonl"`,
@@ -347,9 +355,12 @@ app.get('/api/sessions/:id/export.jsonl', requireAdmin, wrap(async (req, res) =>
   res.send(lines.join('\n') + (lines.length ? '\n' : ''));
 }));
 
-// Errors forwarded by wrap() land here as clean JSON 500s instead of hanging
-// the request or killing the process.
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err);
-  if (!res.headersSent) res.status(500).json({ error: err.message || 'internal error' });
+// Errors forwarded by wrap() (and thrown by body parsers) land here as clean
+// JSON errors instead of hanging the request or killing the process. Preserve
+// the real status: flattening a body-parser 413/400 to 500 would make the
+// frontend's retry queue treat an unfixable request as retryable, forever.
+app.use((err: Error & { status?: number; statusCode?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const status = err.status ?? err.statusCode ?? 500;
+  if (status >= 500) console.error(err);
+  if (!res.headersSent) res.status(status).json({ error: err.message || 'internal error' });
 });

@@ -137,18 +137,21 @@ specific pipeline, which this app deliberately does not touch.
 | GET | `/api/sessions/:id/export` | admin | Flat catalog JSON (includes the brief) |
 | GET | `/api/sessions/:id/export.jsonl` | admin | Feedback JSONL download (skill-compatible format) |
 
-"admin" = requires the `ADMIN_KEY` (as an `x-admin-key` header or a `?key=`
-query param — the export download links use the latter) whenever `ADMIN_KEY`
-is set; "link" = anyone with the session UUID. The client link can pump
-batches toward a target an admin set, but cannot raise the target or pull the
-catalog — holding a link is not a spend or export capability.
+"admin" = requires the `ADMIN_KEY` as an `x-admin-key` header whenever
+`ADMIN_KEY` is set (header-only on purpose — a query param would leak the key
+into history and access logs; the UI downloads exports via fetch + blob so no
+key ever appears in a URL); "link" = anyone with the session UUID. The client
+link can pump batches toward a target an admin set, but cannot raise the
+target or pull the catalog — holding a link is not a spend or export
+capability.
 
 Reliability notes:
 
 - Every rating/reason/audio write from the browser goes through a serial
   retry queue — failures show a "Saving…/retrying" pill instead of silently
-  dropping catalog data, and the transcript + audio for one idea are saved in
-  order so they can't overwrite each other.
+  dropping catalog data, the transcript + audio for one idea are saved in
+  order so they can't overwrite each other, the done screen waits for the
+  queue to drain, and closing the tab with unsaved writes warns first.
 - Audio bodies are capped at 4mb because Vercel rejects serverless request
   bodies over ~4.5MB regardless of app config; recording auto-stops after 3
   minutes. Speech-only memos are ~180KB/minute, nowhere near the cap.

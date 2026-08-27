@@ -75,6 +75,10 @@ function updateSaveStatus() {
   }
 }
 
+// Retrying helps for network errors, 5xx, and throttle/timeout statuses;
+// any other 4xx means the request itself is bad and will never succeed.
+const retryable = (status) => status >= 500 || status === 408 || status === 429;
+
 function persist(label, fn) {
   pendingSaves++;
   updateSaveStatus();
@@ -84,9 +88,9 @@ function persist(label, fn) {
       try {
         const res = await fn();
         if (res.ok) break;
-        // 4xx = the request itself is bad; retrying will never help.
-        if (res.status >= 400 && res.status < 500) {
+        if (!retryable(res.status)) {
           console.warn(`${label} rejected (${res.status})`);
+          flashStatus(`⚠ ${label} was rejected — not saved`);
           break;
         }
       } catch (_) {
@@ -100,9 +104,34 @@ function persist(label, fn) {
     saveFailing = false;
     pendingSaves--;
     updateSaveStatus();
+    // The done screen waits for the queue to drain before claiming "all done".
+    if (pendingSaves === 0) maybeDone();
   });
   return writeChain;
 }
+
+// Transient warning in the same pill (auto-clears back to queue state).
+let flashTimer = null;
+function flashStatus(msg) {
+  const el = $('#save-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  el.classList.add('failing');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    el.classList.remove('failing');
+    updateSaveStatus();
+  }, 4000);
+}
+
+// Queued writes are in-memory only — warn before the tab discards them.
+window.addEventListener('beforeunload', (e) => {
+  if (pendingSaves > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 const RATING_META = {
   love: { emoji: '❤️', label: 'LOVE', color: '#ff4d6d' },
@@ -231,6 +260,8 @@ function renderStack() {
   if (top) stack.appendChild(buildCard(top, 'top'));
   if (!top && state.session.generation.status === 'running') {
     stack.innerHTML = '<div class="idea-card top" style="align-items:center;justify-content:center"><p style="color:var(--muted)">Generating more ideas…</p></div>';
+  } else if (!top && state.session.generation.status === 'error' && state.session.ideas.length < (state.session.generation.target || 0)) {
+    stack.innerHTML = '<div class="idea-card top" style="align-items:center;justify-content:center"><p style="color:var(--muted)">Idea generation hit a snag — tap “retry” above to continue.</p></div>';
   }
 }
 
@@ -325,7 +356,10 @@ async function rateCurrent(rating) {
   if (!idea || state.current) return;
   state.current = { idea, rating };
   idea.rating = rating; // optimistic — the queue retries until it lands
-  persist('rating', () => api.rate(state.session.id, idea.id, rating));
+  // Capture the session id NOW: state.session may point at a different
+  // session by the time a retried write actually runs (admin switching decks).
+  const sid = state.session.id;
+  persist('rating', () => api.rate(sid, idea.id, rating));
   renderProgress();
   openReasonOverlay(rating);
 }
@@ -432,21 +466,27 @@ const MAX_AUDIO_BYTES = 4 * 1024 * 1024;
 $('#btn-save-reason').onclick = async () => {
   await stopCapture();
   const { idea } = state.current;
+  const sid = state.session.id;
   const transcript = $('#reason-text').value.trim();
   const method = transcript ? (state.voiceUsed ? 'voice' : 'typed') : 'skipped';
   const blob = audioBlob && audioBlob.size > 0 && audioBlob.size <= MAX_AUDIO_BYTES ? audioBlob : null;
+  if (audioBlob && audioBlob.size > MAX_AUDIO_BYTES) flashStatus('⚠ voice memo too large to upload — text kept');
 
   // One queue entry for the pair, audio strictly before reason: the reason
   // handler preserves an existing audioFile, so this order can't lose either
   // half — firing both at once could (whole-document saves race server-side).
   persist('reason', async () => {
     if (blob) {
-      const ra = await api.audio(state.session.id, idea.id, blob);
-      // 5xx/network → throw so the whole pair retries; 4xx → keep the transcript.
-      if (!ra.ok && ra.status >= 500) throw new Error(`audio upload ${ra.status}`);
-      if (!ra.ok) console.warn(`audio upload rejected (${ra.status})`);
+      const ra = await api.audio(sid, idea.id, blob);
+      // Throw on retryable failures so the whole pair retries; on a permanent
+      // rejection keep the transcript but tell the user the audio was dropped.
+      if (!ra.ok && retryable(ra.status)) throw new Error(`audio upload ${ra.status}`);
+      if (!ra.ok) {
+        console.warn(`audio upload rejected (${ra.status})`);
+        flashStatus('⚠ voice memo not saved — text kept');
+      }
     }
-    return api.reason(state.session.id, idea.id, transcript, method);
+    return api.reason(sid, idea.id, transcript, method);
   });
   closeReasonAndAdvance();
 };
@@ -454,7 +494,8 @@ $('#btn-save-reason').onclick = async () => {
 $('#btn-skip-reason').onclick = async () => {
   await stopCapture();
   const { idea } = state.current;
-  persist('reason', () => api.reason(state.session.id, idea.id, '', 'skipped'));
+  const sid = state.session.id;
+  persist('reason', () => api.reason(sid, idea.id, '', 'skipped'));
   closeReasonAndAdvance();
 };
 
@@ -492,13 +533,28 @@ async function pumpGeneration() {
   if (state.pumping || state.session.generation.status !== 'running') return;
   state.pumping = true;
   let noProgress = 0;
+  let netFails = 0;
   try {
     while (state.session && state.session.generation.status === 'running') {
       let result;
       try {
         result = await api.generateBatch(state.session.id);
+        netFails = 0;
       } catch (_) {
+        // A lost response may hide a batch the server DID commit — refresh so
+        // those ideas aren't stranded unrated. Cap the retries: an endless
+        // silent loop against a broken server helps nobody.
+        if (++netFails >= 5) {
+          state.session.generation.status = 'error';
+          renderProgress();
+          break;
+        }
         await sleep(5000);
+        try {
+          await refreshSessionIdeas();
+          renderProgress();
+          if (!$('#card-stack .idea-card.top') && !state.current) renderStack();
+        } catch (_) {}
         continue;
       }
       if (result.error) {
@@ -549,6 +605,12 @@ function maybeDone() {
   if (!state.session) return;
   if (state.queue.length > 0 || state.current) return;
   if (state.session.generation.status === 'running') return; // more coming
+  // A failed generation with ideas still owed is NOT done — leaving the rank
+  // view keeps the tap-to-retry control reachable.
+  if (state.session.generation.status === 'error' && state.session.ideas.length < (state.session.generation.target || 0)) return;
+  // Don't claim "all done" while writes are still queued/retrying — persist()
+  // re-calls this when the queue drains.
+  if (pendingSaves > 0) return;
   if (state.session.ideas.length === 0) return;
   const counts = { love: 0, like: 0, dislike: 0, hate: 0 };
   state.session.ideas.forEach((i) => { if (counts[i.rating] !== undefined) counts[i.rating]++; });
@@ -566,14 +628,27 @@ function maybeDone() {
     jsonlLink.classList.add('hidden');
     $('#btn-done-home').classList.add('hidden');
   } else {
-    // Exports are admin-gated; plain <a> downloads can't send headers, so the
-    // key travels as a query param (ignored by the server when ADMIN_KEY is unset).
-    const key = localStorage.getItem('adminKey');
-    const auth = key ? `?key=${encodeURIComponent(key)}` : '';
-    exportLink.href = `/api/sessions/${state.session.id}/export${auth}`;
-    jsonlLink.href = `/api/sessions/${state.session.id}/export.jsonl${auth}`;
+    // Exports are admin-gated and the key must never appear in a URL (history,
+    // logs, Referer) — download via fetch with the header, then a blob link.
+    const slug = state.session.clientSlug || state.session.clientName.toLowerCase().replace(/\s+/g, '-');
+    exportLink.href = '#';
+    jsonlLink.href = '#';
+    exportLink.onclick = (e) => { e.preventDefault(); downloadExport(`/api/sessions/${state.session.id}/export`, `${slug}-catalog.json`); };
+    jsonlLink.onclick = (e) => { e.preventDefault(); downloadExport(`/api/sessions/${state.session.id}/export.jsonl`, `${slug}-ideation-feedback.jsonl`); };
   }
   show('view-done');
+}
+
+async function downloadExport(path, filename) {
+  const res = await adminFetch(path);
+  if (!res.ok) return alert(`Export failed (${res.status})`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 // ---------- Util ----------
