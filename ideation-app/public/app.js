@@ -280,12 +280,9 @@ function buildCard(idea, layer) {
     <div class="angle">${escapeHtml(idea.angle)}</div>
     <h3>${escapeHtml(idea.title)}</h3>
     <div class="card-body">
-      ${idea.summary ? `<p class="summary">${escapeHtml(idea.summary)}</p>` : ''}
-      ${idea.hook ? `<p class="ost hook-line"><span class="ost-label">Hook</span>${escapeHtml(idea.hook)}</p>` : ''}
-      ${idea.ost ? `<p class="ost"><span class="ost-label">On screen</span>${escapeHtml(idea.ost)}</p>` : ''}
+      ${idea.summary ? `<p class="summary">${escapeHtml(idea.summary)}</p>` : `<p class="summary">${escapeHtml(idea.hook)}</p>`}
     </div>
     <div class="card-footer">
-      ${idea.format ? `<div class="format">${escapeHtml(idea.format)}</div>` : ''}
       ${sourceRow}
     </div>`;
   // Tapping the source opens the reference; it must not start a swipe.
