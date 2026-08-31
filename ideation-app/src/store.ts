@@ -23,6 +23,7 @@ export interface Idea {
   title: string;
   hook: string;
   ost: string; // on-screen text line(s), shown under the hook
+  summary: string; // ~3 sentence reader-facing description of the idea itself
   angle: string;
   format: string;
   source: IdeaSource | null;
@@ -81,6 +82,7 @@ export function makeIdea(fields: {
   angle: string;
   format: string;
   ost?: string;
+  summary?: string;
   source?: IdeaSource | null;
 }): Idea {
   return {
@@ -88,6 +90,7 @@ export function makeIdea(fields: {
     title: fields.title,
     hook: fields.hook,
     ost: fields.ost ?? '',
+    summary: fields.summary ?? '',
     angle: fields.angle,
     format: fields.format,
     source: fields.source ?? null,

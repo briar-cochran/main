@@ -266,9 +266,11 @@ input:focus, textarea:focus { outline: none; background: var(--fill-2); box-shad
   margin-bottom: 14px;
 }
 .idea-card .card-body { flex: 1; overflow-y: auto; min-height: 0; }
-.idea-card .hook { color: var(--secondary); font-size: 16px; line-height: 1.45; }
+.idea-card .summary { color: var(--secondary); font-size: 15px; line-height: 1.5; }
+.idea-card .hook-line { font-weight: 500; }
+.idea-card .hook-line .ost-label { color: var(--tint); }
 .idea-card .ost {
-  margin-top: 14px;
+  margin-top: 12px;
   padding: 10px 12px;
   background: var(--fill);
   border-radius: 10px;
