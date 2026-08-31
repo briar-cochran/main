@@ -231,15 +231,15 @@ input:focus, textarea:focus { outline: none; background: var(--fill-2); box-shad
 
 .card-stack {
   position: relative;
-  height: min(460px, 62dvh);
-  margin-bottom: 22px;
+  height: min(600px, 66dvh);
+  margin-bottom: 18px;
 }
 .idea-card {
   position: absolute;
   inset: 0;
   background: var(--card);
   border-radius: var(--radius-deck);
-  padding: 28px 24px calc(24px);
+  padding: 22px 20px 18px;
   display: flex;
   flex-direction: column;
   touch-action: none;
@@ -259,22 +259,22 @@ input:focus, textarea:focus { outline: none; background: var(--fill-2); box-shad
   margin-bottom: 12px;
 }
 .idea-card h3 {
-  font-size: 26px;                 /* SF Display weight territory */
+  font-size: 23px;                 /* SF Display weight territory */
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.18;
   margin-bottom: 14px;
 }
 .idea-card .card-body { flex: 1; overflow-y: auto; min-height: 0; }
-.idea-card .summary { color: var(--secondary); font-size: 15px; line-height: 1.5; }
+.idea-card .summary { color: var(--secondary); font-size: 14px; line-height: 1.45; }
 .idea-card .hook-line { font-weight: 500; }
 .idea-card .hook-line .ost-label { color: var(--tint); }
 .idea-card .ost {
-  margin-top: 12px;
-  padding: 10px 12px;
+  margin-top: 10px;
+  padding: 8px 11px;
   background: var(--fill);
   border-radius: 10px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.35;
@@ -293,8 +293,8 @@ input:focus, textarea:focus { outline: none; background: var(--fill-2); box-shad
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px 10px;
-  margin-top: 14px;
+  gap: 6px 10px;
+  margin-top: 10px;
 }
 .idea-card .format {
   font-size: 13px;
