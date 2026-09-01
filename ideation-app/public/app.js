@@ -791,10 +791,12 @@ function renderLibrary() {
   }
 }
 
-$('#btn-library').onclick = () => {
+function openLibrary() {
   renderLibrary();
   $('#library-overlay').classList.remove('hidden');
-};
+}
+$('#btn-library').onclick = openLibrary;
+$('#btn-done-library').onclick = openLibrary;
 $('#btn-library-close').onclick = () => $('#library-overlay').classList.add('hidden');
 $('#library-overlay').addEventListener('pointerdown', (e) => {
   if (e.target === $('#library-overlay')) $('#library-overlay').classList.add('hidden');
