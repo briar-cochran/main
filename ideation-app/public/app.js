@@ -740,6 +740,66 @@ async function downloadExport(path, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+
+// ---------- Library: rated ideas with full cards ----------
+
+const RANK_ORDER = { love: 0, like: 1, dislike: 2, hate: 3 };
+
+function libCard(idea) {
+  const d = document.createElement('details');
+  d.className = 'lib-item';
+  const m = RATING_META[idea.rating] || { emoji: '', label: '' };
+  const src = idea.source;
+  const points = (idea.talkingPoints || []).map((t) => `<li>${escapeHtml(t)}</li>`).join('');
+  const why = idea.reason && idea.reason.transcript
+    ? `<div class="lib-why">"${escapeHtml(idea.reason.transcript)}"</div>` : '';
+  const audio = idea.reason && idea.reason.audioFile
+    ? `<audio controls preload="none" src="/audio/${escapeHtml(idea.reason.audioFile)}"></audio>` : '';
+  d.innerHTML = `
+    <summary><span class="lib-emoji">${m.emoji}</span>${escapeHtml(idea.title)}<span class="lib-chevron">›</span></summary>
+    <div class="lib-detail">
+      ${idea.summary ? `<p class="summary">${escapeHtml(idea.summary)}</p>` : ''}
+      ${idea.hook ? `<p class="ost"><span class="ost-label">Hook</span>${escapeHtml(idea.hook)}</p>` : ''}
+      ${idea.ost ? `<p class="ost"><span class="ost-label">On screen</span>${escapeHtml(idea.ost)}</p>` : ''}
+      ${points ? `<ul class="lib-points">${points}</ul>` : ''}
+      ${src && src.url ? `<a class="source-link" href="${escapeHtml(src.url)}" target="_blank" rel="noopener noreferrer"><span class="source-arrow">↗</span><span class="source-text">${escapeHtml(src.creator || 'View original')} <span class="source-metric">${escapeHtml(src.metric || '')}</span></span></a>` : ''}
+      ${why}${audio}
+    </div>`;
+  return d;
+}
+
+function renderLibrary() {
+  const list = $('#library-list');
+  list.innerHTML = '';
+  const rated = state.session.ideas.filter((i) => i.rating)
+    .sort((a, b) => (RANK_ORDER[a.rating] ?? 9) - (RANK_ORDER[b.rating] ?? 9));
+  if (!rated.length) {
+    list.innerHTML = '<p style="padding:24px;text-align:center;color:var(--tertiary)">Nothing rated yet. Your loves and likes will collect here.</p>';
+    return;
+  }
+  let current = null;
+  const labels = { love: 'Loved', like: 'Liked', dislike: 'Passed', hate: 'Hated' };
+  for (const idea of rated) {
+    if (idea.rating !== current) {
+      current = idea.rating;
+      const h = document.createElement('div');
+      h.className = 'lib-section';
+      h.textContent = labels[current] || current;
+      list.appendChild(h);
+    }
+    list.appendChild(libCard(idea));
+  }
+}
+
+$('#btn-library').onclick = () => {
+  renderLibrary();
+  $('#library-overlay').classList.remove('hidden');
+};
+$('#btn-library-close').onclick = () => $('#library-overlay').classList.add('hidden');
+$('#library-overlay').addEventListener('pointerdown', (e) => {
+  if (e.target === $('#library-overlay')) $('#library-overlay').classList.add('hidden');
+});
+
 // ---------- Util ----------
 
 function escapeHtml(s) {

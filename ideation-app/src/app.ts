@@ -93,7 +93,7 @@ app.post('/api/sessions', requireAdmin, wrap(async (req, res) => {
     clientSlug?: string;
     brief?: string;
     target?: number;
-    ideas?: Array<{ title: string; hook?: string; ost?: string; summary?: string; angle?: string; format?: string; source?: unknown }>;
+    ideas?: Array<{ title: string; hook?: string; ost?: string; summary?: string; talkingPoints?: unknown; angle?: string; format?: string; source?: unknown }>;
   };
   if (!clientName?.trim()) return res.status(400).json({ error: 'clientName is required' });
 
@@ -112,6 +112,9 @@ app.post('/api/sessions', requireAdmin, wrap(async (req, res) => {
           hook: String(idea.hook ?? ''),
           ost: String(idea.ost ?? ''),
           summary: String(idea.summary ?? '').slice(0, 800),
+          talkingPoints: Array.isArray(idea.talkingPoints)
+            ? idea.talkingPoints.slice(0, 6).map((t) => String(t).slice(0, 400))
+            : [],
           angle: String(idea.angle ?? 'imported'),
           format: String(idea.format ?? ''),
           source: cleanSource(idea.source),
@@ -333,6 +336,7 @@ app.get('/api/sessions/:id/export', requireAdmin, wrap(async (req, res) => {
       hook: i.hook,
       ost: i.ost || null,
       summary: i.summary || null,
+      talkingPoints: i.talkingPoints ?? [],
       angle: i.angle,
       format: i.format,
       source: i.source ?? null,

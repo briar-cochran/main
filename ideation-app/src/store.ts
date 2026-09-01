@@ -24,6 +24,7 @@ export interface Idea {
   hook: string;
   ost: string; // on-screen text line(s), shown under the hook
   summary: string; // ~3 sentence reader-facing description of the idea itself
+  talkingPoints: string[]; // the fleshed-out beats, shown in the library panel
   angle: string;
   format: string;
   source: IdeaSource | null;
@@ -83,6 +84,7 @@ export function makeIdea(fields: {
   format: string;
   ost?: string;
   summary?: string;
+  talkingPoints?: string[];
   source?: IdeaSource | null;
 }): Idea {
   return {
@@ -91,6 +93,7 @@ export function makeIdea(fields: {
     hook: fields.hook,
     ost: fields.ost ?? '',
     summary: fields.summary ?? '',
+    talkingPoints: fields.talkingPoints ?? [],
     angle: fields.angle,
     format: fields.format,
     source: fields.source ?? null,

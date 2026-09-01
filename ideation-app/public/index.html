@@ -42,6 +42,7 @@
   <section id="view-rank" class="view hidden">
     <header class="rank-header">
       <button id="btn-back" class="ghost">←</button>
+      <button id="btn-library" class="ghost" title="Ideas you rated">♥</button>
       <div class="progress-wrap">
         <div class="progress-bar"><div id="progress-fill"></div></div>
         <span id="progress-label">0 / 0</span>
@@ -91,6 +92,17 @@
       <button id="btn-done-home" class="ghost">Back to sessions</button>
     </div>
   </section>
+
+  <!-- Library: slide-out panel of rated ideas with full cards -->
+  <div id="library-overlay" class="lib-overlay hidden">
+    <aside class="library">
+      <header class="lib-header">
+        <h2>Your picks</h2>
+        <button id="btn-library-close" class="ghost">Done</button>
+      </header>
+      <div id="library-list" class="lib-list"></div>
+    </aside>
+  </div>
 
   <!-- Unsaved-writes indicator (rating/reason/audio retry queue) -->
   <div id="save-status" class="save-status hidden"></div>
